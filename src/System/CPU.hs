@@ -250,7 +250,7 @@ tryCPU bs = do
     flg      <- pure (keepTrying bs parseFlags)
     bgm      <- keepTrying bs parseBogoMIPS
     ca       <- pure (keepTrying bs parseCacheAlignment)
-    (pa, va) <- pure $ case (keepTrying bs parseAddresses)
+    (pa, va) <- pure $ case keepTrying bs parseAddresses
                 of Nothing     -> (Nothing, Nothing)
                    Just (p, v) -> (Just p, Just v)
     pure $ CPU proc
@@ -277,7 +277,7 @@ tryCPU bs = do
 --   'Nothing' on your system, please file a bug report with your
 --   @/proc/cpuinfo@ contents and CPU specifications.
 tryGetCPUs :: IO (Maybe [CPU])
-tryGetCPUs = (mapM (tryCPU) . splitCPULines)
+tryGetCPUs = (mapM tryCPU . splitCPULines)
           <$> B.readFile "/proc/cpuinfo"
 
 -- | Read @/proc/cpuinfo@ and try to parse the output. If this function throws
@@ -315,8 +315,8 @@ logicalCores = length
 --   physical execution resources are shared among logical processors, and may
 --   be used to tune parallel applications.
 hyperthreadingFactor :: [CPU] -> Rational
-hyperthreadingFactor cpus = (fromIntegral (logicalCores cpus))
-                          / (fromIntegral (physicalCores cpus))
+hyperthreadingFactor cpus = fromIntegral (logicalCores cpus)
+                          / fromIntegral (physicalCores cpus)
 
 -- | If hyperthreading is in use, the 'hyperthreadingFactor' will be greater
 --   than 1.
