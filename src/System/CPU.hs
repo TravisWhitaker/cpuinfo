@@ -37,13 +37,11 @@ there are in fact two logical cores for each physical core. This is typically
 true of numerical workloads, but as always benchmarking should be employed to
 evaluate the impact of different heuristics.
 
-* Portability
-
 In its current state this module can only collect information from Linux systems
-with a kernel from the 2.6 branch or later by reading @/proc/cpuinfo@. If this
+with a kernel from the 2.6 branch or later by reading @\/proc\/cpuinfo@. If this
 module is unable to provide information on your system please file a bug
-including your @/proc/cpuinfo@. Help providing Windows support would be greatly
-appreciated!
+including your @\/proc\/cpuinfo@. Help providing Windows support would be
+greatly appreciated!
 -}
 
 {-# LANGUAGE DeriveAnyClass
@@ -273,16 +271,16 @@ tryCPU bs = do
                pa
                va
 
--- | Read @/proc/cpuinfo@ and try to parse the output. If this function returns
---   'Nothing' on your system, please file a bug report with your
---   @/proc/cpuinfo@ contents and CPU specifications.
+-- | Read @\/proc\/cpuinfo@ and try to parse the output. If this function
+--   returns 'Nothing' on your system, please file a bug report with your
+--   @\/proc\/cpuinfo@ contents and CPU specifications.
 tryGetCPUs :: IO (Maybe [CPU])
 tryGetCPUs = (mapM tryCPU . splitCPULines)
           <$> B.readFile "/proc/cpuinfo"
 
--- | Read @/proc/cpuinfo@ and try to parse the output. If this function throws
---   an error on your system, please file a bug report with your @/proc/cpuinfo@
---   contents and CPU specifications.
+-- | Read @\/proc\/cpuinfo@ and try to parse the output. If this function throws
+--   an error on your system, please file a bug report with your
+--   @\/proc\/cpuinfo@ contents and CPU specifications.
 getCPUs :: IO [CPU]
 getCPUs = fromMaybe (error e) <$> tryGetCPUs
     where e = unlines [ "Couldn't parse your /proc/cpuinfo contents."
