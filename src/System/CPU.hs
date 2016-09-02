@@ -7,6 +7,43 @@ Maintainer  : pi.boy.travis@gmail.com
 Stability   : Provisional
 Portability : Linux >=2.6
 
+This module provides information about the processors available on a system.
+Modern hardware provides not only multiple physical processors and physical
+cores, but logical cores which may not have dedicated execution resources.
+Intel's Hyper-Threading is an example of such a technology, capable of providing
+two logical cores for every physical core present on a supported physical
+processor.
+
+These additional logical cores increase the performance of some, but not all
+workloads. Indeed, some parallel workloads may suffer a performance decrease if
+all logical cores presented by the operating system do not have dedicated
+physical resources. This is because technologies providing supernumerary logical
+cores typically work by scheduling multiple threads in a shared pool of
+execution resources, e.g. ALUs and FPUs. If threads sharing a pool of execution
+resources are doing the same sort of work there will be scheduling contention
+for a single type of execution resource on the physical core.
+
+It is common for threaded Haskell programs to be run with @+RTS -N@, causing the
+RTS to simply multiplex Haskell threads or sparks over the number of logical
+cores available. However, if each logical core does not have dedicated physical
+resources and the thread/spark workloads are similar, then this might be slower
+than multiplexing over fewer cores.
+
+This package allows a program to use information about the physical and logical
+features of the available processors as a heuristic for selecting the number of
+worker OS threads to use (e.g. via 'setNumCapabilities'). Some workloads may
+benefit from, for example, using half the number of logical cores available if
+there are in fact two logical cores for each physical core. This is typically
+true of numerical workloads, but as always benchmarking should be employed to
+evaluate the impact of different heuristics.
+
+* Portability
+
+In its current state this module can only collect information from Linux systems
+with a kernel from the 2.6 branch or later by reading @/proc/cpuinfo@. If this
+module is unable to provide information on your system please file a bug
+including your @/proc/cpuinfo@. Help providing Windows support would be greatly
+appreciated!
 -}
 
 {-# LANGUAGE DeriveAnyClass
@@ -34,10 +71,6 @@ import Control.Arrow
 
 import Control.DeepSeq
 
-import Control.Monad.Trans.Class
-import Control.Monad.Trans.Maybe
-import Control.Monad.Trans.State.Strict
-
 import qualified Data.Attoparsec.ByteString.Char8 as A
 
 import qualified Data.ByteString       as B
@@ -45,7 +78,9 @@ import qualified Data.ByteString.Char8 as BC
 
 import Data.Data
 
-import qualified Data.Set as S
+import Data.Foldable
+
+import Data.List
 
 import Data.Maybe
 
@@ -58,19 +93,19 @@ data CPU = CPU {
     -- | Logical Processor Index
     processorID     :: !Word32
     -- | CPU Vendor
-  , vendor          :: !B.ByteString
+  , vendor          :: !(Maybe B.ByteString)
     -- | CPU Model Number
-  , model           :: !Word32
+  , model           :: !(Maybe Word32)
     -- | CPU Model Name
-  , modelName       :: !B.ByteString
+  , modelName       :: !(Maybe B.ByteString)
     -- | CPU Model Revision
-  , revision        :: !Word32
+  , revision        :: !(Maybe Word32)
     -- | CPU Microcode Revision
-  , microcode       :: !Word32
+  , microcode       :: !(Maybe Word32)
     -- | Processor Frequency
   , freq            :: !Double
     -- | CPU Cache Size. (TODO figure out how to get the cache topology)
-  , cache           :: !Word32
+  , cache           :: !(Maybe Word32)
     -- | Physical Processor Index
   , physicalID      :: !Word32
     -- | Number of Physical Cores on this Physical Processor.
@@ -78,22 +113,22 @@ data CPU = CPU {
     -- | Physical Core Index
   , coreID          :: !Word32
     -- | CPU APIC Index
-  , apicID          :: !Word32
+  , apicID          :: !(Maybe Word32)
     -- | Whether or not the Physical Core provides a floating point unit.
-  , fpu             :: !Bool
+  , fpu             :: !(Maybe Bool)
     -- | Whether or not the Physical Core provides a floating point exception
     --   unit.
-  , fpuExcept       :: !Bool
+  , fpuExcept       :: !(Maybe Bool)
     -- | Vendor-specific CPU flags.
-  , flags           :: [B.ByteString]
+  , flags           :: !(Maybe [B.ByteString])
     -- | MIPS approximation computed by the Linux kernel on boot.
   , bogoMIPS        :: !Double
     -- | Cache line size in bytes.
-  , cacheAlignment  :: !Word32
+  , cacheAlignment  :: !(Maybe Word32)
     -- | Physical address width.
-  , physicalAddress :: !Word32
+  , physicalAddress :: !(Maybe Word32)
     -- | Virtual address width.
-  , virtualAddress  :: !Word32
+  , virtualAddress  :: !(Maybe Word32)
   } deriving ( Eq
              , Ord
              , Read
@@ -181,19 +216,13 @@ parseBool = (A.string "yes" *> pure True)
 parseWords :: A.Parser [B.ByteString]
 parseWords = A.sepBy (A.takeWhile1 (/= ' ')) (A.char ' ')
 
-type TryLines = MaybeT (State [B.ByteString])
+parseMaybe :: A.Parser a -> B.ByteString -> Maybe a
+parseMaybe = (check .) . A.parseOnly
+    where check (Left _)  = Nothing
+          check (Right x) = Just x
 
-runTryLines :: TryLines a -> [B.ByteString] -> Maybe a
-runTryLines = evalState . runMaybeT
-
-keepTrying :: A.Parser a -> TryLines a
-keepTrying p = do
-    lss <- lift get
-    case lss of
-        []     -> fail ""
-        (l:ls) -> case A.parseOnly p l of
-            Right r -> lift (put ls) *> pure r
-            Left _  -> lift (put ls) *> keepTrying p
+keepTrying :: [B.ByteString] -> A.Parser a -> Maybe a
+keepTrying bs p = asum (map (parseMaybe p) bs)
 
 splitCPULines :: B.ByteString -> [[B.ByteString]]
 splitCPULines = splitCPUs . BC.lines
@@ -202,26 +231,28 @@ splitCPULines = splitCPUs . BC.lines
                          in cs : case lss of []      -> []
                                              (_:ls') -> splitCPUs ls'
 
-tryCPU :: TryLines CPU
-tryCPU = do
-    proc     <- keepTrying parseProcessor
-    vend     <- keepTrying parseVendor
-    modl     <- keepTrying parseModel
-    modn     <- keepTrying parseModelName
-    rev      <- keepTrying parseRevision
-    mcode    <- keepTrying parseMicrocode
-    frq      <- keepTrying parseFreq
-    cch      <- keepTrying parseCache
-    pid      <- keepTrying parsePhysicalID
-    sib      <- keepTrying parseSiblings
-    cid      <- keepTrying parseCoreID
-    aid      <- keepTrying parseApicID
-    flpu     <- keepTrying parseFpu
-    flpex    <- keepTrying parseFpuExcept
-    flg      <- keepTrying parseFlags
-    bgm      <- keepTrying parseBogoMIPS
-    ca       <- keepTrying parseCacheAlignment
-    (pa, va) <- keepTrying parseAddresses
+tryCPU :: [B.ByteString] -> Maybe CPU
+tryCPU bs = do
+    proc     <- keepTrying bs parseProcessor
+    vend     <- pure (keepTrying bs parseVendor)
+    modl     <- pure (keepTrying bs parseModel)
+    modn     <- pure (keepTrying bs parseModelName)
+    rev      <- pure (keepTrying bs parseRevision)
+    mcode    <- pure (keepTrying bs parseMicrocode)
+    frq      <- keepTrying bs parseFreq
+    cch      <- pure (keepTrying bs parseCache)
+    pid      <- keepTrying bs parsePhysicalID
+    sib      <- keepTrying bs parseSiblings
+    cid      <- keepTrying bs parseCoreID
+    aid      <- pure (keepTrying bs parseApicID)
+    flpu     <- pure (keepTrying bs parseFpu)
+    flpex    <- pure (keepTrying bs parseFpuExcept)
+    flg      <- pure (keepTrying bs parseFlags)
+    bgm      <- keepTrying bs parseBogoMIPS
+    ca       <- pure (keepTrying bs parseCacheAlignment)
+    (pa, va) <- pure $ case (keepTrying bs parseAddresses)
+                of Nothing     -> (Nothing, Nothing)
+                   Just (p, v) -> (Just p, Just v)
     pure $ CPU proc
                vend
                modl
@@ -246,7 +277,7 @@ tryCPU = do
 --   'Nothing' on your system, please file a bug report with your
 --   @/proc/cpuinfo@ contents and CPU specifications.
 tryGetCPUs :: IO (Maybe [CPU])
-tryGetCPUs = (mapM (runTryLines tryCPU) . splitCPULines)
+tryGetCPUs = (mapM (tryCPU) . splitCPULines)
           <$> B.readFile "/proc/cpuinfo"
 
 -- | Read @/proc/cpuinfo@ and try to parse the output. If this function throws
@@ -259,20 +290,17 @@ getCPUs = fromMaybe (error e) <$> tryGetCPUs
                       , "https://github.com/traviswhitaker/cpuinfo/issues"
                       ]
 
-unique :: Ord a => [a] -> Int
-unique = S.size . S.fromList
-
 -- | Counts the number of physical processors in the system. A physical
 --   processor corresponds to a single CPU unit in a single socket, i.e. unless
 --   you have a multi-socket motherboard, this number will be one.
 physicalProcessors :: [CPU] -> Int
-physicalProcessors = unique . map physicalID
+physicalProcessors = length . nub . map physicalID
 
 -- | Counts the number of physical cores in the system. A physical core is an
 --   independent processing unit that reads and executes instructions on its
 --   own, but potentially shares its die (and other resources) with other cores.
 physicalCores :: [CPU] -> Int
-physicalCores = unique . map (physicalID &&& coreID)
+physicalCores = length . nub . map (physicalID &&& coreID)
 
 -- | Counts the number of logical cores in the system. A logical core is a
 --   virtual processing unit exposed to the operating system, that may or may
