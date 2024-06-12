@@ -17,8 +17,8 @@ library
    exposed-modules:     System.CPU
   build-depends:       base >=4.8 && <5.0
                      , attoparsec >=0.13 && <0.15
-                     , bytestring >=0.10 && <0.12
-                     , deepseq >=1.4 && <1.5
+                     , bytestring >=0.10 && <0.13
+                     , deepseq >=1.4 && <1.6
   hs-source-dirs:      src
   ghc-options:         -Wall
                        -fwarn-identities
