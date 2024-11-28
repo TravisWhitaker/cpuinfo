@@ -1,18 +1,17 @@
-let pinned-nixpkgs = builtins.fetchGit
-    {
-        url = "https://github.com/nixos/nixpkgs";
-        ref = "master";
-        rev = "66b571c10b0fdac6739fd51d04e87f8bce77f91e";
-    };
+{ tryLatest ? false
+}:
+let pkgs = if tryLatest
+           then {url = "https://github.com/nixos/nixpkgs"; ref = "master";}
+           else import ./pinned.nix;
+    pinned-nixpkgs = builtins.fetchGit pkgs;
 in with import pinned-nixpkgs {};
 runCommand "cpuinfo-env"
 {
     buildInputs =
-        let thisghc = haskell.packages.ghc865.ghcWithPackages
-            (p: [ p.cabal-install
-                  p.ghcid
-                ]);
+        let thisghc = haskell.packages.ghc983.ghcWithPackages
+            (p: []);
         in [ thisghc
              binutils
+             cabal-install
            ];
 } ""
