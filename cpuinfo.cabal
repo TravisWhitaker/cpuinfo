@@ -1,5 +1,5 @@
 name:                cpuinfo
-version:             0.1.0.2
+version:             0.1.0.3
 synopsis:            Haskell Library for Checking CPU Information
 description:         Haskell Library for Checking CPU Information
 homepage:            https://github.com/TravisWhitaker/cpuinfo
